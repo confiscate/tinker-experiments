@@ -80,14 +80,16 @@ def summarize(concurrency: int, results: list[RequestResult], wall_time_s: float
     )
 
 
-def make_sampling_client():
+def make_sampling_client(base_model: str = BASE_MODEL, renderer_name: str = RENDERER_NAME):
     """Build a fresh service client + sampling client + renderer.
     Used identically by Experiment A (once) and Experiment B (once per process).
+    Accepts optional overrides so later experiments can swap models without
+    touching bench_common.
     """
     service_client = tinker.ServiceClient()
-    sampling_client = service_client.create_sampling_client(base_model=BASE_MODEL)
+    sampling_client = service_client.create_sampling_client(base_model=base_model)
     tokenizer = sampling_client.get_tokenizer()
-    renderer = get_renderer(RENDERER_NAME, tokenizer)
+    renderer = get_renderer(renderer_name, tokenizer)
     stop_sequences = renderer.get_stop_sequences()
     params = tinker.SamplingParams(max_tokens=80, temperature=0.7, stop=stop_sequences)
     return sampling_client, renderer, params
