@@ -139,6 +139,104 @@ def main():
     for lines, metric, filename, title in plots:
         save_plot(lines, metric, filename, title)
 
+    # ── EF p50: annotate slowdown ratios from E concurrency=1 ───────────────
+    e_baseline_x = 1   # concurrency=1, 1 process → total concurrent = 1
+    e_baseline_p50 = next(r["p50_latency_s"] for r in e if r["concurrency"] == 1)
+
+    f_50proc  = next(r for r in f if r["n_processes"] == 50)
+    f_24proc  = next(r for r in f if r["n_processes"] == 24)
+    f_50_x, f_50_p50 = f_50proc["n_processes"] * 16, f_50proc["p50_latency_s"]
+    f_24_x, f_24_p50 = f_24proc["n_processes"] * 16, f_24proc["p50_latency_s"]
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    xe, p50e, p95e = total_concurrent(e, 1)
+    xf, p50f, p95f = total_concurrent(f, 16)
+    ax.plot(xe, p50e, marker="o", label="E — 35B, 1 process", color="tab:purple")
+    ax.plot(xf, p50f, marker="o", label="F — 35B, N processes × 16", color="tab:brown")
+
+    for f_x, f_p50 in [(f_24_x, f_24_p50), (f_50_x, f_50_p50)]:
+        ratio = f_p50 / e_baseline_p50
+        # Horizontal dashed line from baseline up to the F point's height
+        ax.annotate(
+            "",
+            xy=(f_x, f_p50),
+            xytext=(e_baseline_x, f_p50),
+            arrowprops=dict(arrowstyle="-", linestyle="dashed", color="gray"),
+        )
+        # Vertical line from E baseline to F p50 height at F's x
+        ax.annotate(
+            "",
+            xy=(f_x, f_p50),
+            xytext=(f_x, e_baseline_p50),
+            arrowprops=dict(arrowstyle="<->", color="black"),
+        )
+        # Label the ratio
+        ax.text(
+            f_x + 15, (e_baseline_p50 + f_p50) / 2,
+            f"{ratio:.2f}×",
+            va="center", fontsize=10, fontweight="bold", color="black",
+        )
+
+    # Horizontal baseline reference line
+    ax.axhline(e_baseline_p50, color="tab:purple", linestyle=":", linewidth=1, alpha=0.6)
+    ax.text(5, e_baseline_p50 + 0.1, f"E baseline (concurrency=1): {e_baseline_p50:.2f}s",
+            fontsize=8, color="tab:purple")
+
+    ax.set_title("E vs F — 35B model, p50 latency with slowdown ratios")
+    ax.set_xlabel("Total concurrent requests")
+    ax.set_ylabel("Latency (s)")
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.3)
+    ax.set_ylim(0)
+    fig.tight_layout()
+    fig.savefig("plot_ef_p50.png", dpi=150)
+    plt.close(fig)
+    print("Rewrote plot_ef_p50.png")
+
+    # ── EF p95: annotate slowdown ratios from E concurrency=1 ───────────────
+    e_baseline_p95 = next(r["p95_latency_s"] for r in e if r["concurrency"] == 1)
+    f_50_p95 = f_50proc["p95_latency_s"]
+    f_24_p95 = f_24proc["p95_latency_s"]
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    ax.plot(xe, p95e, marker="o", label="E — 35B, 1 process", color="tab:purple")
+    ax.plot(xf, p95f, marker="o", label="F — 35B, N processes × 16", color="tab:brown")
+
+    for f_x, f_p95 in [(f_24_x, f_24_p95), (f_50_x, f_50_p95)]:
+        ratio = f_p95 / e_baseline_p95
+        ax.annotate(
+            "",
+            xy=(f_x, f_p95),
+            xytext=(e_baseline_x, f_p95),
+            arrowprops=dict(arrowstyle="-", linestyle="dashed", color="gray"),
+        )
+        ax.annotate(
+            "",
+            xy=(f_x, f_p95),
+            xytext=(f_x, e_baseline_p95),
+            arrowprops=dict(arrowstyle="<->", color="black"),
+        )
+        ax.text(
+            f_x + 15, (e_baseline_p95 + f_p95) / 2,
+            f"{ratio:.2f}×",
+            va="center", fontsize=10, fontweight="bold", color="black",
+        )
+
+    ax.axhline(e_baseline_p95, color="tab:purple", linestyle=":", linewidth=1, alpha=0.6)
+    ax.text(5, e_baseline_p95 + 0.2, f"E baseline (concurrency=1): {e_baseline_p95:.2f}s",
+            fontsize=8, color="tab:purple")
+
+    ax.set_title("E vs F — 35B model, p95 latency with slowdown ratios")
+    ax.set_xlabel("Total concurrent requests")
+    ax.set_ylabel("Latency (s)")
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.3)
+    ax.set_ylim(0)
+    fig.tight_layout()
+    fig.savefig("plot_ef_p95.png", dpi=150)
+    plt.close(fig)
+    print("Rewrote plot_ef_p95.png")
+
 
 if __name__ == "__main__":
     main()
