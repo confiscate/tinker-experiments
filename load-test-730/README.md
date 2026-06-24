@@ -8,10 +8,10 @@ Reproduces and localizes the slowdown reported in
 - 16 concurrent requests/process × 50 Python processes
 - Users on `Qwen3.5-35B-A3B-Base` reported the worst degradation
 
-**Finding:** The slowdown is **real and model-specific**. It does not appear on
-small models (Qwen3.5-4B) but is clearly reproducible on Qwen3.5-35B-A3B-Base,
-where p50 latency more than doubles and p95 reaches 3–4× baseline under the
-reported load pattern.
+**Finding:** 
+- the degradation is not client-side
+- the slowdown is model-specific. It does not appear on
+small models (Qwen3.5-4B) but is reproducible on Qwen3.5-35B-A3B-Base
 
 ---
 
