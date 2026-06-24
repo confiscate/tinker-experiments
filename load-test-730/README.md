@@ -175,7 +175,7 @@ Result:
 - even at concurrency=1, p50 is already 3.2s — more than 2x the 4B baseline (i.e. Experiment C)
 - the backend is near capacity for this model under light load
 - p95 swings wildly (8–14s), indicating scheduling is not deterministic at this model size
-- **Throughput plateaus at ~4 req/s regardless of how many concurrent requests are sent**, implying a hard backend compute ceiling for this model
+- **throughput plateaus at ~4 req/s regardless of how many concurrent requests are sent**, implying a hard backend compute ceiling for this model
 
 ![C vs E p50](plot_ce_p50.png)
 
