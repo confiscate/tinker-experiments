@@ -52,13 +52,7 @@ Model:
 Setup:
 1 process, multiple concurrent requests.
 Specifically, mutliple runs, each run with 1 process and these number of concurrent requests:
-- 1
-- 2
-- 4
-- 8
-- 16
-- 24
-- 32
+[1, 2, 4, 8, 16, 32]
 
 Result:
 - Per-request latency is stable across all runs
@@ -146,7 +140,6 @@ Result:
 
 3x slowdown from issue #730 still not reproduced in Experiment C and D. 
 
-![experiment A vs B](concurrency_benchmark.png)
 
 Next iteration:
 - Perhaps the model size is a factor
@@ -184,6 +177,9 @@ Result:
 - p95 swings wildly (8–14s), indicating scheduling is not deterministic at this model size
 - **Throughput plateaus at ~4 req/s regardless of how many concurrent requests are sent**, implying a hard backend compute ceiling for this model
 
+![C vs E p50](plot_ce_p50.png)
+
+![C vs E p95](plot_ce_p95.png)
 
 
 ### Iteration 3: Experiment F
@@ -210,13 +206,13 @@ Result:
 | 32 | 512 | 5.24 | 9.24 | 16.77 |
 | **50** | **800** | **6.28** | **10.47** | 17.45 |
 
-- **The slowdown onset is at ~24 processes (384 total concurrent requests).**
-- At this point p95 spikes to 21.9s — nearly 10× the 4B baseline (Experiment D) and 2.4× the
-single-process 35B baseline (Experiment E)
-- At 50 processes × 16 concurrent (the exact reported setup), p50 = 6.3s vs. 4.4s single-process baseline (Experiment D), and p95 = 10.5s. That is roughly **1.4× p50 degradation and 1.1× p95 degradation** from adding multi-process load on top of the already-degraded 35B baseline (Experiment E)
-— consistent with the ~3× total slowdown the reporter observed when comparing against unloaded single-job performance.
+- p50 spikes to 6.95s, ~ 2.2× the single-process 35B baseline (Experiment E) of 3.17s
+- p95 spikes to 21.88s, ~ 2.7× the single-process 35B baseline (Experiment E) of 8.06s
+- this explains the ~3× slowdown
 
-!(plot all)[concurrency_benchmark_all.png]
+![E vs F p50](plot_ef_p50.png)
+
+![E vs F p95](plot_ef_p95.png)
 
 
 
