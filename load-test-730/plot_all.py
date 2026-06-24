@@ -58,88 +58,86 @@ def annotate_slowdown(ax, rows, x_key, threshold_p50=None, threshold_p95=None):
             threshold_p95 = None
 
 
+def total_concurrent(rows, concurrency_per_process):
+    """Convert rows to (x, p50, p95) using total concurrent requests as x-axis."""
+    key = "concurrency" if "concurrency" in rows[0] else "n_processes"
+    return (
+        [r[key] * concurrency_per_process for r in rows],
+        [r["p50_latency_s"] for r in rows],
+        [r["p95_latency_s"] for r in rows],
+    )
+
+
+def save_plot(lines, metric, filename, title):
+    """
+    lines: list of (rows, concurrency_per_process, label, color)
+    metric: "p50_latency_s" or "p95_latency_s"
+    """
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for rows, cpp, label, color in lines:
+        x, p50, p95 = total_concurrent(rows, cpp)
+        y = p50 if metric == "p50_latency_s" else p95
+        ax.plot(x, y, marker="o", label=label, color=color)
+    ax.set_title(title)
+    ax.set_xlabel("Total concurrent requests")
+    ax.set_ylabel("Latency (s)")
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.3)
+    ax.set_ylim(0)
+    fig.tight_layout()
+    fig.savefig(filename, dpi=150)
+    plt.close(fig)
+    print(f"Wrote {filename}")
+
+
 def main():
-    a = load_csv("experiment_a_results.csv")
-    b = load_csv("experiment_b_results.csv")
     c = load_csv("experiment_c_results.csv")
     d = load_csv("experiment_d_results.csv")
     e = load_csv("experiment_e_results.csv")
     f = load_csv("experiment_f_results.csv")
 
-    fig, axes = plt.subplots(3, 2, figsize=(14, 14))
-    fig.suptitle(
-        "Tinker sampling latency — issue #730 investigation (A→F)\n"
-        "Left: single-process concurrency  |  Right: multi-process load (x = total concurrent requests)",
-        fontsize=12,
-    )
+    plots = [
+        # (lines, metric, filename, title)
+        (
+            [(c, 1, "C — 4B, 1 process", "tab:green"),
+             (e, 1, "E — 35B, 1 process", "tab:purple")],
+            "p50_latency_s", "plot_ce_p50.png",
+            "C vs E — single-process concurrency, p50 latency",
+        ),
+        (
+            [(c, 1, "C — 4B, 1 process", "tab:green"),
+             (e, 1, "E — 35B, 1 process", "tab:purple")],
+            "p95_latency_s", "plot_ce_p95.png",
+            "C vs E — single-process concurrency, p95 latency",
+        ),
+        (
+            [(d, 16, "D — 4B, N processes × 16", "tab:red"),
+             (f, 16, "F — 35B, N processes × 16", "tab:brown")],
+            "p50_latency_s", "plot_df_p50.png",
+            "D vs F — multi-process × 16 concurrent/process, p50 latency",
+        ),
+        (
+            [(d, 16, "D — 4B, N processes × 16", "tab:red"),
+             (f, 16, "F — 35B, N processes × 16", "tab:brown")],
+            "p95_latency_s", "plot_df_p95.png",
+            "D vs F — multi-process × 16 concurrent/process, p95 latency",
+        ),
+        (
+            [(e, 1,  "E — 35B, 1 process", "tab:purple"),
+             (f, 16, "F — 35B, N processes × 16", "tab:brown")],
+            "p50_latency_s", "plot_ef_p50.png",
+            "E vs F — 35B model, single-process vs multi-process, p50 latency",
+        ),
+        (
+            [(e, 1,  "E — 35B, 1 process", "tab:purple"),
+             (f, 16, "F — 35B, N processes × 16", "tab:brown")],
+            "p95_latency_s", "plot_ef_p95.png",
+            "E vs F — 35B model, single-process vs multi-process, p95 latency",
+        ),
+    ]
 
-    # ── Row 1: A and B (original, small model) ──────────────────────────────
-    ax = axes[0][0]
-    plot_single_process(ax, a, "A", "tab:blue", "tab:orange")
-    ax.set_title("A — single-process, 4B, no warmup (original)")
-    ax.set_xlabel("Concurrent requests (1 process)")
-    ax.set_ylabel("Latency (s)")
-    ax.legend(); ax.grid(alpha=0.3)
-
-    ax = axes[0][1]
-    # Exp B: 1 sequential req/process → total concurrent = n_processes × 1
-    plot_multi_process(ax, b, concurrency_per_process=1)
-    ax.set_title("B — multi-process, 4B, 1 req/process sequential (original)")
-    ax.set_xlabel("Total concurrent requests (processes × 1)")
-    ax.set_ylabel("Latency (s)")
-    ax.legend(); ax.grid(alpha=0.3)
-
-    # ── Row 2: C and D (revised, small model) ───────────────────────────────
-    ax = axes[1][0]
-    plot_single_process(ax, c, "C", "tab:blue", "tab:orange")
-    ax.set_title("C — single-process, 4B, with warmup (revised)")
-    ax.set_xlabel("Concurrent requests (1 process)")
-    ax.set_ylabel("Latency (s)")
-    ax.legend(); ax.grid(alpha=0.3)
-
-    ax = axes[1][1]
-    # Exp D: 16 concurrent/process → total = n_processes × 16
-    plot_multi_process(ax, d, concurrency_per_process=16)
-    ax.set_title("D — multi-process × 16 concurrent/process, 4B, with warmup (revised)")
-    ax.set_xlabel("Total concurrent requests (processes × 16)")
-    ax.set_ylabel("Latency (s)")
-    ax.legend(); ax.grid(alpha=0.3)
-
-    # ── Row 3: E and F (revised, large model) ───────────────────────────────
-    ax = axes[2][0]
-    plot_single_process(ax, e, "E", "tab:blue", "tab:orange")
-    ax.set_title("E — single-process, 35B-A3B, with warmup ⚠️")
-    ax.set_xlabel("Concurrent requests (1 process)")
-    ax.set_ylabel("Latency (s)")
-    ax.legend(); ax.grid(alpha=0.3)
-
-    ax = axes[2][1]
-    # Exp F: 16 concurrent/process → total = n_processes × 16
-    f_for_plot = [dict(r, n_processes=r["n_processes"]) for r in f]
-    plot_multi_process(ax, f, concurrency_per_process=16)
-    # Annotate the spike at 24 processes (384 total)
-    spike = next(r for r in f if r["n_processes"] == 24)
-    ax.annotate(
-        f"⚠ p95={spike['p95_latency_s']:.1f}s\n(24 proc × 16 = 384 concurrent)",
-        xy=(384, spike["p95_latency_s"]),
-        xytext=(280, spike["p95_latency_s"] + 2),
-        arrowprops=dict(arrowstyle="->", color="tab:red"),
-        color="tab:red", fontsize=8,
-    )
-    ax.set_title("F — multi-process × 16 concurrent/process, 35B-A3B, with warmup ⚠️")
-    ax.set_xlabel("Total concurrent requests (processes × 16)")
-    ax.set_ylabel("Latency (s)")
-    ax.legend(); ax.grid(alpha=0.3)
-
-    # Shared y-axis scale per row so rows are comparable
-    for row_axes in axes:
-        ymax = max(ax.get_ylim()[1] for ax in row_axes)
-        for ax in row_axes:
-            ax.set_ylim(0, ymax)
-
-    fig.tight_layout()
-    fig.savefig("concurrency_benchmark_all.png", dpi=150)
-    print("Wrote concurrency_benchmark_all.png")
+    for lines, metric, filename, title in plots:
+        save_plot(lines, metric, filename, title)
 
 
 if __name__ == "__main__":
