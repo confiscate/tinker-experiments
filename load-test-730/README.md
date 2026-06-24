@@ -34,49 +34,77 @@ reported load pattern.
 
 ## Experiment design
 
-Each generation of experiments isolates one variable at a time.
+Each iteration of experiments test 1 hypothesis at a time.
+- Iteration 1: test if slowdown is coming from client side (Experiment A) vs server side (Experiment B)
+- Iteration 2: slowdown not found in Iteration 1, focus on finding slowdown in Iteration 2
+- Iteration 3: slowdown still not found in Iteration 2, try a larger model
 
-### Axis 1: single-process internal concurrency (Experiments A, C, E)
+### Iteration 1: Experiment A
+Goal:
+- Load test concurrency within a process
+- See if slowdown is caused by client side instead of server side
+- Only shared resource is whatever is inside one client (its connection pool, event loop, etc.) — so if it degrades, that's a client-side cause
 
-One process, one `SamplingClient`. Fire an increasing number of concurrent
-requests via `asyncio.gather` (1→64). This tests whether the bottleneck is
-**client-side** — event loop, connection pool, transport, etc. If latency
-degrades here, the problem is contained within one process. If latency stays
-flat, the client scales fine and the issue must be elsewhere.
+Model: 
+- Qwen3.5-4B
+- smaller model, save on cost
 
-### Axis 2: multi-process load (Experiments B, D, F)
+Setup:
+1 process, multiple concurrent requests.
+Specifically, mutliple runs, each run with 1 process and these number of concurrent requests:
+- 1
+- 2
+- 4
+- 8
+- 16
+- 24
+- 32
 
-Many independent OS processes (1→50), each with its own `SamplingClient`.
-Processes share **no client-side state** — no connection pool, no event loop,
-no memory. This tests whether the bottleneck is **server-side** — account-level
-session caps, backend queueing, GPU compute contention.
+Result:
+- Per-request latency is stable across all runs
+- No 3x slowdown
 
-### Methodology improvements (v2: C/D/F vs. A/B)
 
-Experiments A and B had two flaws that were fixed in the revised versions:
+### Iteration 1: Experiment B
+Goal:
+- Load test N parallel processes, with no concurrency inside each process
+- See if slowdown is caused by server side instead of client side
+- Processes share nothing client-side; the only thing they have in common is hitting the same backend/account — so if it degrades, that points at something server-side (queueing, the "session cap," rate limiting).
 
-1. **No warmup.** Workers called `make_sampling_client()` and immediately started
-   timing requests. Tokenizer loading and connection setup were baked into
-   measurements, inflating wall times especially at high process counts where 50
-   processes all hit disk and network simultaneously at startup.
+Model: Qwen3.5-4B
 
-2. **Sequential requests per process in B.** Experiment B ran one request at a
-   time per process, so it never tested the actual reported conditions (16
-   concurrent/process × 50 processes). Experiments D and F use `asyncio.gather`
-   within each worker to match the reporter's setup.
+Setup:
+1,2,4,8,16,24,32,50 processes ran in parallel, each process runs 4 requests 1 at a time (non-parallel).
 
-**Fix:** Experiments C/D/F use a `multiprocessing.Pool` initializer
-(`worker_init` in `bench_worker_v2.py`) that builds the `SamplingClient` and
-fires one untimed warmup request per worker before the timed sweep starts. This
-isolates network/compute latency from setup cost.
+Result:
+- Per-request latency is stable across all runs
+- No 3x slowdown
 
----
 
-## Results
+### Iteration 1 Result
 
-### Small model (Qwen3.5-4B) — no degradation
+3x slowdown from issue #730 not reproduced in Experiment A and B. 
 
-**Experiment C** — single-process concurrency sweep, with warmup:
+Next iteration:
+- Shift focus: instead of isolating slowdown in client side vs server side, focus on reproducing the 3x slowdown
+- Mirror the setup described by users who saw the slowdown in issue #730 (16 concurrent requests per process, 50 process in parallel)
+- Add a warmup request per worker before starting the timed portion, so startup cost isn't counted.
+
+
+### Iteration 2: Experiment C
+Goal:
+- do not count startup cost in latency calculations
+- add a warmup request
+
+Model: Qwen3.5-4B
+
+Setup:
+- same as Experiment A, except with an initial throwaway request that isn't counted in latency calculations
+
+Result:
+- overall, same as Experiment A
+- p50 is flat (1.45–1.66s)
+- no slowdown found
 
 | Concurrency | p50 (s) | p95 (s) | Throughput (req/s) |
 |---|---|---|---|
@@ -87,10 +115,21 @@ isolates network/compute latency from setup cost.
 | 32 | 1.66 | 2.05 | 15.31 |
 | 64 | 1.46 | 1.87 | 15.56 |
 
-p50 is dead flat (1.45–1.66s) across the full range. No single-process
-bottleneck.
 
-**Experiment D** — multi-process × 16 concurrent/process, with warmup:
+### Iteration 2: Experiment D
+Goal: 
+- Mirror the setup described by users who saw the slowdown in issue #730 (16 concurrent requests per process, 50 process in parallel)
+
+Setup:
+- run N processes × 16 concurrent requests in each process
+- run N=[1,4,8,16,32,50], to find exact point where slowdown might occur
+
+Result:
+- still no slowdown found
+- p50 barely moves. p95 drifts up slightly above 256 concurrent but stays under
+3.3s
+- this largely supports the maintainer's claim that the backend handles high concurrency. p95 shows some degradation but p50 seems fine
+
 
 | Processes | Total concurrent | p50 (s) | p95 (s) | Throughput (req/s) |
 |---|---|---|---|---|
@@ -101,15 +140,33 @@ bottleneck.
 | 32 | 512 | 1.68 | 2.28 | 34.26 |
 | 50 | 800 | 1.93 | 3.30 | 24.52 |
 
-p50 barely moves. p95 drifts up slightly above 256 concurrent but stays under
-3.3s. The 4B model handles the reported load fine — **the 4B is not where the
-reported issue lives**.
 
----
 
-### Large model (Qwen3.5-35B-A3B-Base) — slowdown confirmed ⚠️
+### Iteration 2 Result
 
-**Experiment E** — single-process concurrency sweep, with warmup:
+3x slowdown from issue #730 still not reproduced in Experiment C and D. 
+
+![experiment A vs B](concurrency_benchmark.png)
+
+Next iteration:
+- Perhaps the model size is a factor
+- Use the same model mentioned by a user in issue #730
+
+
+
+
+### Iteration 3: Experiment E
+Goal:
+- similar to Experiment C
+- use larger model to see if slowdown occurs
+- if slowdown does occur, see if the cause is client-side
+
+Model: Qwen3.5-35B-A3B-Base
+
+Setup:
+- same as Experiment C, except with larger model Qwen3.5-35B-A3B-Base
+
+Result:
 
 | Concurrency | p50 (s) | p95 (s) | Throughput (req/s) |
 |---|---|---|---|
@@ -122,14 +179,25 @@ reported issue lives**.
 | 48 | **6.32** | 8.45 | 3.74 |
 | 64 | 3.94 | **12.20** | 2.61 |
 
-Even at concurrency=1, p50 is already 3.2s — more than 2× the 4B baseline.
-The backend is near capacity for this model under light load. p95 swings
-wildly (8–14s), indicating scheduling is not deterministic at this model size.
-**Throughput plateaus at ~4 req/s regardless of how many concurrent requests
-are sent**, implying a hard backend compute ceiling for this model.
+- even at concurrency=1, p50 is already 3.2s — more than 2x the 4B baseline (i.e. Experiment C)
+- the backend is near capacity for this model under light load
+- p95 swings wildly (8–14s), indicating scheduling is not deterministic at this model size
+- **Throughput plateaus at ~4 req/s regardless of how many concurrent requests are sent**, implying a hard backend compute ceiling for this model
 
-**Experiment F** — multi-process × 16 concurrent/process, with warmup
-(closest replication of the reported conditions):
+
+
+### Iteration 3: Experiment F
+Goal:
+- similar to Experiment D
+- use a larger model to see if slowdown occurs
+- replicate the # of processes + concurrent requests reported by users in issue #730
+
+Model: Qwen3.5-35B-A3B-Base
+
+Setup:
+- same as Experiment D, except with larger model Qwen3.5-35B-A3B-Base
+
+Result:
 
 | Processes | Total concurrent | p50 (s) | p95 (s) | Throughput (req/s) |
 |---|---|---|---|---|
@@ -142,16 +210,15 @@ are sent**, implying a hard backend compute ceiling for this model.
 | 32 | 512 | 5.24 | 9.24 | 16.77 |
 | **50** | **800** | **6.28** | **10.47** | 17.45 |
 
-**The slowdown onset is at ~24 processes (384 total concurrent requests).**
-At this point p95 spikes to 21.9s — nearly 10× the 4B baseline and 2.4× the
-single-process 35B baseline. At 50 processes × 16 concurrent (the exact
-reported setup), p50 = 6.3s vs. 4.4s single-process baseline, and p95 =
-10.5s. That is roughly **1.4× p50 degradation and 1.1× p95 degradation**
-from adding multi-process load on top of the already-degraded 35B baseline —
-consistent with the ~3× total slowdown the reporter observed when comparing
-against unloaded single-job performance.
+- **The slowdown onset is at ~24 processes (384 total concurrent requests).**
+- At this point p95 spikes to 21.9s — nearly 10× the 4B baseline (Experiment D) and 2.4× the
+single-process 35B baseline (Experiment E)
+- At 50 processes × 16 concurrent (the exact reported setup), p50 = 6.3s vs. 4.4s single-process baseline (Experiment D), and p95 = 10.5s. That is roughly **1.4× p50 degradation and 1.1× p95 degradation** from adding multi-process load on top of the already-degraded 35B baseline (Experiment E)
+— consistent with the ~3× total slowdown the reporter observed when comparing against unloaded single-job performance.
 
----
+!(plot all)[concurrency_benchmark_all.png]
+
+
 
 ## Root cause
 
@@ -174,7 +241,7 @@ anything client-side. Evidence:
    doesn't get more work done, it just divides the same capacity further.
 
 4. **The degradation is not client-side.** Processes share no state. The only
-   common point is the backend. Multi-process degradation (Exp F) directly
+   common point is the backend. Multi-process degradation (Experiment F) directly
    implicates the server.
 
 **Hypothesis:** The Tinker backend allocates a fixed GPU budget per model
@@ -221,3 +288,4 @@ Budget accordingly — a full Experiment F run costs roughly 1,600 requests ×
   parallelism rather than discovering the ceiling empirically, or
 - **Backpressure / queue-depth signaling** in the API so clients can adapt
   their concurrency rather than flooding a saturated backend.
+
